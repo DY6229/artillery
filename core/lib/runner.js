@@ -42,7 +42,7 @@ function validate(script) {
   return validation;
 }
 
-async function runner(script, payload, options, callback) {
+function runner(script, payload, options, callback) {
   let opts = _.assign({
     periodicStats: script.config.statsInterval || 10,
     mode: script.config.mode || 'uniform'
