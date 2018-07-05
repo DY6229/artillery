@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+* License, v. 2.0. If a copy of the MPL was not distributed with this
+* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 'use strict';
 
@@ -20,24 +20,26 @@ const engineUtil = require('./engine_util');
 const wl = require('./weighted-pick');
 
 const Engines = {
-  http: {},
-  ws: {},
-  socketio: {}
+    http: {},
+    ws: {},
+    socketio: {}
 };
+
+let contextVars;
 
 JSCK.Draft4 = JSCK.draft4;
 
 const schema = new JSCK.Draft4(require('./schemas/artillery_test_script.json'));
 
 module.exports = {
-  runner: runner,
-  validate: validate,
-  stats: Stats
+    runner: runner,
+    validate: validate,
+    stats: Stats
 };
 
 function validate(script) {
-  let validation = schema.validate(script);
-  return validation;
+    let validation = schema.validate(script);
+    return validation;
 }
 
 function runner(script, payload, options, callback) {
@@ -119,6 +121,10 @@ function runner(script, payload, options, callback) {
         }
       }
   );
+
+  if (script.before) {
+    handleBeforeRequests(script, runnableScript, runnerEngines, ee);
+  }
 
   //
   // load plugins:
@@ -244,72 +250,76 @@ function runner(script, payload, options, callback) {
 }
 
 function run(script, ee, options, runState) {
-  let intermediate = Stats.create();
-  let aggregate = [];
+    let intermediate = Stats.create();
+    let aggregate = [];
 
-  let phaser = createPhaser(script.config.phases);
-  phaser.on('arrival', function() {
-    runScenario(script, intermediate, runState);
-  });
-  phaser.on('phaseStarted', function(spec) {
-    ee.emit('phaseStarted', spec);
-  });
-  phaser.on('phaseCompleted', function(spec) {
-    ee.emit('phaseCompleted', spec);
-  });
-  phaser.on('done', function() {
-    debug('All phases launched');
-
-    const doneYet = setInterval(function checkIfDone() {
-      if (runState.pendingScenarios === 0) {
-        if (runState.pendingRequests !== 0) {
-          debug('DONE. Pending requests: %s', runState.pendingRequests);
+    let phaser = createPhaser(script.config.phases);
+    phaser.on('arrival', function() {
+        if (runState.pendingRequests >= (process.env.CONCURRENCY_LIMIT || 250)) {
+            intermediate._scenariosAvoided++;
+        } else {
+            runScenario(script, intermediate, runState);
         }
+    });
+    phaser.on('phaseStarted', function(spec) {
+        ee.emit('phaseStarted', spec);
+    });
+    phaser.on('phaseCompleted', function(spec) {
+        ee.emit('phaseCompleted', spec);
+    });
+    phaser.on('done', function() {
+        debug('All phases launched');
 
-        clearInterval(doneYet);
-        clearInterval(periodicStatsTimer);
+        const doneYet = setInterval(function checkIfDone() {
+            if (runState.pendingScenarios === 0) {
+                if (runState.pendingRequests !== 0) {
+                    debug('DONE. Pending requests: %s', runState.pendingRequests);
+                }
 
-        sendStats();
+                clearInterval(doneYet);
+                clearInterval(periodicStatsTimer);
 
-        intermediate.free();
+                sendStats();
 
-        let aggregateReport = Stats.combine(aggregate).report();
-        return ee.emit('done', aggregateReport);
-      } else {
-        debug('Pending requests: %s', runState.pendingRequests);
-        debug('Pending scenarios: %s', runState.pendingScenarios);
-      }
-    }, 500);
-  });
+                intermediate.free();
 
-  const periodicStatsTimer = setInterval(sendStats, options.periodicStats * 1000);
+                let aggregateReport = Stats.combine(aggregate).report();
+                return ee.emit('done', aggregateReport);
+            } else {
+                debug('Pending requests: %s', runState.pendingRequests);
+                debug('Pending scenarios: %s', runState.pendingScenarios);
+            }
+        }, 500);
+    });
 
-  function sendStats() {
-    intermediate._concurrency = runState.pendingScenarios;
-    intermediate._pendingRequests = runState.pendingRequests;
-    ee.emit('stats', intermediate.clone());
-    delete intermediate._entries;
-    aggregate.push(intermediate.clone());
-    intermediate.reset();
-  }
+    const periodicStatsTimer = setInterval(sendStats, options.periodicStats * 1000);
 
-  phaser.run();
+    function sendStats() {
+        intermediate._concurrency = runState.pendingScenarios;
+        intermediate._pendingRequests = runState.pendingRequests;
+        ee.emit('stats', intermediate.clone());
+        delete intermediate._entries;
+        aggregate.push(intermediate.clone());
+        intermediate.reset();
+    }
+
+    phaser.run();
 }
 
 function runScenario(script, intermediate, runState) {
-  const start = process.hrtime();
+    const start = process.hrtime();
 
-  //
-  // Compile scenarios if needed
-  //
-  if (!runState.compiledScenarios) {
-    _.each(script.scenarios, function(scenario) {
-      if (!scenario.weight) {
-        scenario.weight = 1;
-      }
-    });
+    //
+    // Compile scenarios if needed
+    //
+    if (!runState.compiledScenarios) {
+        _.each(script.scenarios, function(scenario) {
+            if (!scenario.weight) {
+                scenario.weight = 1;
+            }
+        });
 
-    runState.picker = wl(script.scenarios);
+        runState.picker = wl(script.scenarios);
 
     runState.scenarioEvents = new EventEmitter();
     runState.scenarioEvents.on('counter', function(name, value) {
@@ -331,74 +341,83 @@ function runScenario(script, intermediate, runState) {
     runState.scenarioEvents.on('request', function() {
       intermediate.newRequest();
 
-      runState.pendingRequests++;
-    });
-    runState.scenarioEvents.on('match', function() {
-      intermediate.addMatch();
-    });
-    runState.scenarioEvents.on('response', function(delta, code, uid) {
-      intermediate.completedRequest();
-      intermediate.addLatency(delta);
-      intermediate.addCode(code);
+            runState.pendingRequests++;
+        });
+        runState.scenarioEvents.on('match', function() {
+            intermediate.addMatch();
+        });
+        runState.scenarioEvents.on('response', function(delta, code, uid) {
+            intermediate.completedRequest();
+            intermediate.addLatency(delta);
+            intermediate.addCode(code);
 
-      let entry = [Date.now(), uid, delta, code];
-      intermediate.addEntry(entry);
+            let entry = [Date.now(), uid, delta, code];
 
-      runState.pendingRequests--;
-    });
+            intermediate.addEntry(entry);
 
-    runState.compiledScenarios = _.map(
-        script.scenarios,
-        function(scenarioSpec) {
-          const name = scenarioSpec.engine || 'http';
-          const engine = runState.engines.find((e) => e.__name === name);
-          return engine.createScenario(scenarioSpec, runState.scenarioEvents);
-        }
-    );
-  }
+            runState.pendingRequests--;
+        });
 
-  let i = runState.picker()[0];
+        runState.compiledScenarios = _.map(
+            script.scenarios,
+            function(scenarioSpec) {
+                const name = scenarioSpec.engine || 'http';
+                const engine = runState.engines.find((e) => e.__name === name);
+                return engine.createScenario(scenarioSpec, runState.scenarioEvents);
+            }
+        );
+    }
 
-  debug('picking scenario %s (%s) weight = %s',
+    let i = runState.picker()[0];
+
+    debug('picking scenario %s (%s) weight = %s',
         i,
         script.scenarios[i].name,
         script.scenarios[i].weight);
 
-  intermediate.newScenario(script.scenarios[i].name || i);
+    intermediate.newScenario(script.scenarios[i].name || i);
 
-  const scenarioStartedAt = process.hrtime();
-  const scenarioContext = createContext(script);
-  const finish = process.hrtime(start);
-  const runScenarioDelta = (finish[0] * 1e9) + finish[1];
-  debugPerf('runScenarioDelta: %s', Math.round(runScenarioDelta / 1e6 * 100) / 100);
-  runState.compiledScenarios[i](scenarioContext, function(err, context) {
-    runState.pendingScenarios--;
-    if (err) {
-      debug(err);
-    } else {
-      const scenarioFinishedAt = process.hrtime(scenarioStartedAt);
-      const delta = (scenarioFinishedAt[0] * 1e9) + scenarioFinishedAt[1];
-      intermediate.addScenarioLatency(delta);
-      intermediate.completedScenario();
-    }
-  });
+    const scenarioStartedAt = process.hrtime();
+    const scenarioContext = createContext(script);
+    const finish = process.hrtime(start);
+    const runScenarioDelta = (finish[0] * 1e9) + finish[1];
+    debugPerf('runScenarioDelta: %s', Math.round(runScenarioDelta / 1e6 * 100) / 100);
+    runState.compiledScenarios[i](scenarioContext, function(err, context) {
+        runState.pendingScenarios--;
+        if (err) {
+            debug(err);
+        } else {
+            const scenarioFinishedAt = process.hrtime(scenarioStartedAt);
+            const delta = (scenarioFinishedAt[0] * 1e9) + scenarioFinishedAt[1];
+            intermediate.addScenarioLatency(delta);
+            intermediate.completedScenario();
+        }
+    });
 }
 
 /**
- * Create initial context for a scenario.
- */
+* Create initial context for a scenario.
+*/
 function createContext(script) {
-  const INITIAL_CONTEXT = {
-    vars: {
-      target: script.config.target,
-      $environment: script._environment
-    },
-    funcs: {
-      $randomNumber: $randomNumber,
-      $randomString: $randomString
-    }
+  let initialContext = {};
+  if (contextVars) {
+    initialContext = {
+      vars: contextVars
+    };
+  } else {
+    initialContext = {
+      vars: {
+        target: script.config.target,
+        $environment: script._environment
+      }
+    };
+  }
+  initialContext.funcs = {
+    $randomNumber: $randomNumber,
+    $randomString: $randomString
   };
-  let result = _.cloneDeep(INITIAL_CONTEXT);
+
+  let result = _.cloneDeep(initialContext);
 
   //
   // variables from payloads
@@ -435,9 +454,30 @@ function createContext(script) {
 // Generator functions for template strings:
 //
 function $randomNumber(min, max) {
-  return _.random(min, max);
+    return _.random(min, max);
 }
 
 function $randomString(length) {
-  return Math.random().toString(36).substr(2, length);
+    return Math.random().toString(36).substr(2, length);
+}
+
+function handleBeforeRequests(script, runnableScript, runnerEngines, testEvents) {
+  let ee = new EventEmitter();
+  ee.on('request', function() {
+    testEvents.emit('beforeTestRequest');
+  });
+  ee.on('error', function(error) {
+    testEvents.emit('beforeTestError', error);
+  });
+  let name = runnableScript.before.engine || 'http';
+  let engine = runnerEngines.find((e) => e.__name === name);
+  let beforeTestScenario = engine.createScenario(runnableScript.before, ee);
+  let beforeTestContext = createContext(script);
+  beforeTestScenario(beforeTestContext, function(err, context) {
+    if (err) {
+      debug(err);
+    } else {
+      contextVars = context.vars;
+    }
+  });
 }

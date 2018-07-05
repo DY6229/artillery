@@ -436,17 +436,18 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
 
         request(requestParams, maybeCallback)
           .on('request', function(req) {
-            debugRequests("request start: %s", req.path);
+            debugRequests('request start: %s', req.path);
             ee.emit('request');
 
             const startedAt = process.hrtime();
 
             req.on('response', function updateLatency(res) {
               let code = res.statusCode;
+              let path = res.req.method + ' ' + res.req.path;
               const endedAt = process.hrtime(startedAt);
               let delta = (endedAt[0] * 1e9) + endedAt[1];
-              debugRequests("request end: %s", req.path);
-              ee.emit('response', delta, code, context._uid);
+              debugRequests('request end: %s', req.path);
+              ee.emit('response', delta, code, context._uid, path);
             });
           }).on('end', function() {
             context._successCount++;
@@ -458,7 +459,7 @@ HttpEngine.prototype.step = function step(requestSpec, ee, opts) {
             debug(err);
 
             // Run onError hooks and end the scenario
-            runOnErrorHooks(onErrorHandlers, config.processor, err, requestParams, context, ee, function(asyncErr) {
+            runOnErrorHooks(onErrorHandlers, config.processor, err, requestParams, context, ee, function() {
               let errCode = err.code || err.message;
               ee.emit('error', errCode);
               return callback(err, context);
