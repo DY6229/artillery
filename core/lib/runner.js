@@ -42,7 +42,7 @@ function validate(script) {
   return validation;
 }
 
-function runner(script, payload, options, callback) {
+async function runner(script, payload, options, callback) {
   let opts = _.assign({
     periodicStats: script.config.statsInterval || 10,
     mode: script.config.mode || 'uniform'
@@ -122,131 +122,131 @@ function runner(script, payload, options, callback) {
       }
   );
 
-  if (script.before) {
-    handleBeforeRequests(script, runnableScript, runnerEngines, ee);
-  }
 
-  //
-  // load plugins:
-  //
-  let runnerPlugins = [];
-  let requirePaths = [];
+  return handleBeforeRequests(script, runnableScript, runnerEngines, ee)   
+    .then(function(){
+        //
+        // load plugins:
+        //
+        let runnerPlugins = [];
+        let requirePaths = [];
 
-  let pro = null;
-  if (tryResolve('artillery-pro')) {
-    pro = require('artillery-pro');
-    requirePaths = requirePaths.concat(pro.getPluginPath());
-  } else {
-    debug('Artillery Pro is not installed.');
-  }
-
-  requirePaths.push('');
-
-  if (process.env.ARTILLERY_PLUGIN_PATH) {
-    requirePaths = requirePaths.concat(process.env.ARTILLERY_PLUGIN_PATH.split(':'));
-  }
-
-  debug('require paths: ', requirePaths);
-
-  runnableScript.config.plugins = runnableScript.config.plugins || {};
-
-  if (process.env.ARTILLERY_PLUGINS) {
-    let additionalPlugins = {};
-    try {
-      additionalPlugins = JSON.parse(process.env.ARTILLERY_PLUGINS);
-    } catch (ignoreErr) {
-      debug(ignoreErr);
-    }
-    runnableScript.config.plugins = Object.assign(
-      runnableScript.config.plugins,
-      additionalPlugins);
-  }
-
-  _.each(runnableScript.config.plugins, function tryToLoadPlugin(pluginConfig, pluginName) {
-    let pluginConfigScope = pluginConfig.scope || runnableScript.config.pluginsScope;
-    let pluginPrefix = pluginConfigScope ? pluginConfigScope : 'artillery-plugin-';
-    let requireString = pluginPrefix + pluginName;
-    let Plugin, plugin;
-
-    requirePaths.forEach(function(rp) {
-      try {
-        Plugin = require(path.join(rp, requireString));
-        if (typeof Plugin === 'function') {
-          // Plugin interface v1
-          plugin = new Plugin(runnableScript.config, ee);
-          plugin.__name = pluginName;
-        } else if (typeof Plugin === 'object' && typeof Plugin.Plugin === 'function') {
-          // Plugin interface 2+
-          plugin = new Plugin.Plugin(runnableScript, ee, options);
-          plugin.__name = pluginName;
+        let pro = null;
+        if (tryResolve('artillery-pro')) {
+            pro = require('artillery-pro');
+            requirePaths = requirePaths.concat(pro.getPluginPath());
+        } else {
+            debug('Artillery Pro is not installed.');
         }
-      } catch (err) {
-        debug(err);
-      }
+
+        requirePaths.push('');
+
+        if (process.env.ARTILLERY_PLUGIN_PATH) {
+            requirePaths = requirePaths.concat(process.env.ARTILLERY_PLUGIN_PATH.split(':'));
+        }
+
+        debug('require paths: ', requirePaths);
+
+        runnableScript.config.plugins = runnableScript.config.plugins || {};
+
+        if (process.env.ARTILLERY_PLUGINS) {
+            let additionalPlugins = {};
+            try {
+            additionalPlugins = JSON.parse(process.env.ARTILLERY_PLUGINS);
+            } catch (ignoreErr) {
+            debug(ignoreErr);
+            }
+            runnableScript.config.plugins = Object.assign(
+            runnableScript.config.plugins,
+            additionalPlugins);
+        }
+
+        _.each(runnableScript.config.plugins, function tryToLoadPlugin(pluginConfig, pluginName) {
+            let pluginConfigScope = pluginConfig.scope || runnableScript.config.pluginsScope;
+            let pluginPrefix = pluginConfigScope ? pluginConfigScope : 'artillery-plugin-';
+            let requireString = pluginPrefix + pluginName;
+            let Plugin, plugin;
+
+            requirePaths.forEach(function(rp) {
+            try {
+                Plugin = require(path.join(rp, requireString));
+                if (typeof Plugin === 'function') {
+                // Plugin interface v1
+                plugin = new Plugin(runnableScript.config, ee);
+                plugin.__name = pluginName;
+                } else if (typeof Plugin === 'object' && typeof Plugin.Plugin === 'function') {
+                // Plugin interface 2+
+                plugin = new Plugin.Plugin(runnableScript, ee, options);
+                plugin.__name = pluginName;
+                }
+            } catch (err) {
+                debug(err);
+            }
+            });
+
+            if (!Plugin || !plugin) {
+            console.log(
+                'WARNING: plugin %s specified but module %s could not be loaded',
+                pluginName,
+                requireString);
+            warnings.plugins[pluginName] = {
+                message: 'Could not load'
+            };
+            } else {
+            debug('Plugin %s loaded from %s', pluginName, requireString);
+            runnerPlugins.push(plugin);
+            }
+        });
+
+        const promise = new Promise(function(resolve, reject) {
+            ee.run = function() {
+            let runState = {
+                pendingScenarios: 0,
+                pendingRequests: 0,
+                compiledScenarios: null,
+                scenarioEvents: null,
+                picker: undefined,
+                plugins: runnerPlugins,
+                engines: runnerEngines
+            };
+            debug('run() with: %j', runnableScript);
+            run(runnableScript, ee, opts, runState);
+            };
+
+            ee.stop = function (done) {
+            // allow plugins to cleanup
+            A.eachSeries(
+                runnerPlugins,
+                function(plugin, next) {
+                if (plugin.cleanup) {
+                    plugin.cleanup(function(err) {
+                    if (err) {
+                        debug(err);
+                    }
+                    return next();
+                    });
+                } else {
+                    return next();
+                }
+                },
+                function(err) {
+                return done(err);
+                });
+            };
+
+            // FIXME: Warnings should be returned from this function instead along with
+            // the event emitter. That will be a breaking change.
+            ee.warnings = warnings;
+
+            resolve(ee);
     });
 
-    if (!Plugin || !plugin) {
-      console.log(
-        'WARNING: plugin %s specified but module %s could not be loaded',
-        pluginName,
-        requireString);
-      warnings.plugins[pluginName] = {
-        message: 'Could not load'
-      };
-    } else {
-      debug('Plugin %s loaded from %s', pluginName, requireString);
-      runnerPlugins.push(plugin);
+    if (callback && typeof callback === 'function') {
+        promise.then(callback.bind(null, null), callback);
     }
+
+    return promise;
   });
-
-  const promise = new Promise(function(resolve, reject) {
-    ee.run = function() {
-      let runState = {
-        pendingScenarios: 0,
-        pendingRequests: 0,
-        compiledScenarios: null,
-        scenarioEvents: null,
-        picker: undefined,
-        plugins: runnerPlugins,
-        engines: runnerEngines
-      };
-      debug('run() with: %j', runnableScript);
-      run(runnableScript, ee, opts, runState);
-    };
-
-    ee.stop = function (done) {
-      // allow plugins to cleanup
-      A.eachSeries(
-        runnerPlugins,
-        function(plugin, next) {
-          if (plugin.cleanup) {
-            plugin.cleanup(function(err) {
-              if (err) {
-                debug(err);
-              }
-              return next();
-            });
-          } else {
-            return next();
-          }
-        },
-        function(err) {
-          return done(err);
-        });
-    };
-
-    // FIXME: Warnings should be returned from this function instead along with
-    // the event emitter. That will be a breaking change.
-    ee.warnings = warnings;
-
-    resolve(ee);
-  });
-
-  if (callback && typeof callback === 'function') {
-    promise.then(callback.bind(null, null), callback);
-  }
-
-  return promise;
 }
 
 function run(script, ee, options, runState) {
@@ -458,22 +458,30 @@ function $randomString(length) {
 }
 
 function handleBeforeRequests(script, runnableScript, runnerEngines, testEvents) {
-  let ee = new EventEmitter();
-  ee.on('request', function() {
-    testEvents.emit('beforeTestRequest');
-  });
-  ee.on('error', function(error) {
-    testEvents.emit('beforeTestError', error);
-  });
-  let name = runnableScript.before.engine || 'http';
-  let engine = runnerEngines.find((e) => e.__name === name);
-  let beforeTestScenario = engine.createScenario(runnableScript.before, ee);
-  let beforeTestContext = createContext(script);
-  beforeTestScenario(beforeTestContext, function(err, context) {
-    if (err) {
-      debug(err);
-    } else {
-      contextVars = context.vars;
-    }
-  });
+    return new Promise(function(resolve, reject){
+        if (script.before) {
+            let ee = new EventEmitter();
+            ee.on('request', function() {
+              testEvents.emit('beforeTestRequest');
+            });
+            ee.on('error', function(error) {
+              testEvents.emit('beforeTestError', error);
+            });
+            let name = runnableScript.before.engine || 'http';
+            let engine = runnerEngines.find((e) => e.__name === name);
+            let beforeTestScenario = engine.createScenario(runnableScript.before, ee);
+            let beforeTestContext = createContext(script);
+            beforeTestScenario(beforeTestContext, function(err, context) {
+              if (err) {
+                debug(err);
+                return reject(err);
+              } else {
+                contextVars = context.vars;
+                return resolve();
+              }
+            });
+        } else {
+            return resolve();
+        }
+    });
 }
