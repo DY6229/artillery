@@ -1,6 +1,6 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/. */
+* License, v. 2.0. If a copy of the MPL was not distributed with this
+* file, You can obtain one at http://mozilla.org/MPL/2.0/. */
 
 'use strict';
 
@@ -20,9 +20,9 @@ const engineUtil = require('./engine_util');
 const wl = require('./weighted-pick');
 
 const Engines = {
-  http: {},
-  ws: {},
-  socketio: {}
+    http: {},
+    ws: {},
+    socketio: {}
 };
 
 let contextVars;
@@ -32,14 +32,14 @@ JSCK.Draft4 = JSCK.draft4;
 const schema = new JSCK.Draft4(require('./schemas/artillery_test_script.json'));
 
 module.exports = {
-  runner: runner,
-  validate: validate,
-  stats: Stats
+    runner: runner,
+    validate: validate,
+    stats: Stats
 };
 
 function validate(script) {
-  let validation = schema.validate(script);
-  return validation;
+    let validation = schema.validate(script);
+    return validation;
 }
 
 function runner(script, payload, options, callback) {
@@ -253,18 +253,21 @@ function run(script, ee, options, runState) {
     let intermediate = Stats.create();
     let aggregate = [];
 
-    let phaser = createPhaser(script.config.phases);
-    phaser.on('arrival', function() {
-            runScenario(script, intermediate, runState);
-    });
-    phaser.on('phaseStarted', function(spec) {
-        ee.emit('phaseStarted', spec);
-    });
-    phaser.on('phaseCompleted', function(spec) {
-        ee.emit('phaseCompleted', spec);
-    });
-    phaser.on('done', function() {
-        debug('All phases launched');
+  let phaser = createPhaser(script.config.phases);
+  phaser.on('arrival', function() {
+    if (runState.pendingRequests >= (process.env.CONCURRENCY_LIMIT || 250)) {
+            intermediate._scenariosAvoided++;
+            }
+         else {runScenario(script, intermediate, runState);}
+  });
+  phaser.on('phaseStarted', function(spec) {
+    ee.emit('phaseStarted', spec);
+  });
+  phaser.on('phaseCompleted', function(spec) {
+    ee.emit('phaseCompleted', spec);
+  });
+  phaser.on('done', function() {
+    debug('All phases launched');
 
         const doneYet = setInterval(function checkIfDone() {
             if (runState.pendingScenarios === 0) {
@@ -290,14 +293,14 @@ function run(script, ee, options, runState) {
 
     const periodicStatsTimer = setInterval(sendStats, options.periodicStats * 1000);
 
-    function sendStats() {
-        intermediate._concurrency = runState.pendingScenarios;
-        intermediate._pendingRequests = runState.pendingRequests;
-        ee.emit('stats', intermediate.clone());
-        delete intermediate._entries;
-        aggregate.push(intermediate.clone());
-        intermediate.reset();
-    }
+  function sendStats() {
+    intermediate._concurrency = runState.pendingScenarios;
+    intermediate._pendingRequests = runState.pendingRequests;
+    ee.emit('stats', intermediate.clone());
+    delete intermediate._entries;
+    aggregate.push(intermediate.clone());
+    intermediate.reset();
+  }
 
     phaser.run();
 }
