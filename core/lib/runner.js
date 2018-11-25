@@ -423,6 +423,18 @@ function createContext(script) {
 
     let result = _.cloneDeep(initialContext);
 
+
+  let absoluteScriptPath = path.resolve(process.cwd());
+  if (script.config.customFunctions) {
+    let customFunctionsPath = path.resolve(
+      path.dirname(absoluteScriptPath),
+      script.config.customFunctions);
+    let customFunctions = require(customFunctionsPath);
+    Object.keys(customFunctions).forEach((customFunction) => {
+      initialContext.funcs[customFunction] = customFunctions[customFunction]
+    })
+  }
+
     //
     // variables from payloads
     //
