@@ -84,6 +84,9 @@ function runner(script, payload, options, callback) {
         script.config.payload = null;
     }
 
+    console.log(script.config.customFunctions);
+    console.log(__dirname);
+
     if (script.config.customFunctions) {
         script.config.customFunctions = require(script.config.customFunctions);
     }
